@@ -1,0 +1,46 @@
+# Builds MarksApp, runs the UI tests in the iOS Simulator and uploads the screenshots they capture.
+# Manual trigger only, because macOS runner minutes are limited.
+name: Simulator UI tests and screenshots
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ui-tests:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Boot an iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | jq -r '
+            [.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))] as $phones
+            | (($phones | map(select(.name | test("^iPhone [0-9]+ Pro$"))) | last) // ($phones | last)) | .udid')
+          echo "Using simulator $UDID"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID"
+          xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
+
+      - name: Build and run UI tests
+        run: |
+          xcodebuild test \
+            -project MarksApp/MarksApp.xcodeproj \
+            -scheme MarksApp \
+            -destination "id=$UDID" \
+            -resultBundlePath TestResults.xcresult \
+            -parallel-testing-enabled NO
+
+      - name: Export screenshots
+        if: always()
+        run: xcrun xcresulttool export attachments --path TestResults.xcresult --output-path attachments
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-screenshots
+          path: attachments
